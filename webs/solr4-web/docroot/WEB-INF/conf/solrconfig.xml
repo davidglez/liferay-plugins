@@ -156,11 +156,28 @@
 		</shardHandler>
 	</requestHandler>
 	<requestHandler name="/replication" class="solr.ReplicationHandler" startup="lazy" />
+
 	<searchComponent name="spellcheck" class="solr.SpellCheckComponent">
 		<str name="queryAnalyzerFieldType">textSpell</str>
 		<lst name="spellchecker">
 			<str name="name">default</str>
-			<str name="field">name</str>
+			<str name="field">spell</str>
+			<str name="classname">solr.DirectSolrSpellChecker</str>
+			<str name="distanceMeasure">internal</str>
+			<float name="accuracy">0.5</float>
+			<int name="maxEdits">2</int>
+			<int name="minPrefix">1</int>
+			<int name="maxInspections">5</int>
+			<int name="minQueryLength">4</int>
+			<float name="maxQueryFrequency">0.01</float>
+		</lst>
+	</searchComponent>
+
+	<searchComponent name="spellcheck_en_US" class="solr.SpellCheckComponent">
+		<str name="queryAnalyzerFieldType">textSpell</str>
+		<lst name="spellchecker">
+			<str name="name">default</str>
+			<str name="field">spell</str>
 			<str name="classname">solr.DirectSolrSpellChecker</str>
 			<str name="distanceMeasure">internal</str>
 			<float name="accuracy">0.5</float>
@@ -171,19 +188,19 @@
 			<float name="maxQueryFrequency">0.01</float>
 		</lst>
 		<lst name="spellchecker">
-			<str name="name">wordbreak</str>
-			<str name="classname">solr.WordBreakSolrSpellChecker</str>
-			<str name="field">name</str>
-			<str name="combineWords">true</str>
-			<str name="breakWords">true</str>
-			<int name="maxChanges">10</int>
+			<str name="name">en_US</str>
+			<str name="classname">org.apache.solr.spelling.suggest.Suggester</str>
+			<str name="lookupImpl">org.apache.solr.spelling.suggest.tst.TSTLookup</str>
+			<str name="field">spell</str>
+			<float name="threshold">0.005</float>
+			<str name="sourceLocation">en_US.txt</str>
 		</lst>
 	</searchComponent>
-	<requestHandler name="/spell" class="solr.SearchHandler" startup="lazy">
+	<requestHandler name="/spell_en_US" class="solr.SearchHandler" startup="lazy">
 		<lst name="defaults">
 			<str name="df">text</str>
 			<str name="spellcheck.dictionary">default</str>
-			<str name="spellcheck.dictionary">wordbreak</str>
+			<str name="spellcheck.dictionary">en_US</str>
 			<str name="spellcheck">on</str>
 			<str name="spellcheck.extendedResults">true</str>
 			<str name="spellcheck.count">10</str>
@@ -191,13 +208,80 @@
 			<str name="spellcheck.maxResultsForSuggest">5</str>
 			<str name="spellcheck.collate">true</str>
 			<str name="spellcheck.collateExtendedResults">true</str>
-			<str name="spellcheck.maxCollationTries">10</str>
+<!-- 			<str name="spellcheck.maxCollationTries">10</str> -->
 			<str name="spellcheck.maxCollations">5</str>
 		</lst>
 		<arr name="last-components">
-			<str>spellcheck</str>
+			<str>spellcheck_en_US</str>
 		</arr>
 	</requestHandler>
+	
+	<searchComponent name="spellcheck_es_ES" class="solr.SpellCheckComponent">
+		<str name="queryAnalyzerFieldType">textSpell</str>
+		<lst name="spellchecker">
+			<str name="name">default</str>
+			<str name="field">spell</str>
+			<str name="classname">solr.DirectSolrSpellChecker</str>
+			<str name="distanceMeasure">internal</str>
+			<float name="accuracy">0.5</float>
+			<int name="maxEdits">2</int>
+			<int name="minPrefix">1</int>
+			<int name="maxInspections">5</int>
+			<int name="minQueryLength">4</int>
+			<float name="maxQueryFrequency">0.01</float>
+		</lst>
+		<lst name="spellchecker">
+			<str name="name">es_ES</str>
+			<str name="classname">org.apache.solr.spelling.suggest.Suggester</str>
+			<str name="lookupImpl">org.apache.solr.spelling.suggest.tst.TSTLookup</str>
+			<str name="field">spell</str>
+			<float name="threshold">0.005</float>
+			<str name="sourceLocation">es_ES.txt</str>
+		</lst>
+	</searchComponent>
+	<requestHandler name="/spell_es_ES" class="solr.SearchHandler" startup="lazy">
+		<lst name="defaults">
+			<str name="df">text</str>
+			<str name="spellcheck.dictionary">default</str>
+			<str name="spellcheck.dictionary">es_ES</str>
+			<str name="spellcheck">on</str>
+			<str name="spellcheck.extendedResults">true</str>
+			<str name="spellcheck.count">10</str>
+			<str name="spellcheck.alternativeTermCount">5</str>
+			<str name="spellcheck.maxResultsForSuggest">5</str>
+			<str name="spellcheck.collate">true</str>
+			<str name="spellcheck.collateExtendedResults">true</str>
+<!-- 			<str name="spellcheck.maxCollationTries">10</str> -->
+			<str name="spellcheck.maxCollations">5</str>
+		</lst>
+		<arr name="last-components">
+			<str>spellcheck_es_ES</str>
+		</arr>
+	</requestHandler>
+	
+	<searchComponent name="suggest" class="solr.SpellCheckComponent">
+		<str name="queryAnalyzerFieldType">textAuto</str>
+				<lst name="spellchecker">
+				<str name="name">suggestions</str>
+				<str name="field">keywordSearch</str>
+				<str name="classname">org.apache.solr.spelling.suggest.Suggester</str>
+				<str name="lookupImpl">org.apache.solr.spelling.suggest.tst.TSTLookup</str>
+			</lst>
+		</searchComponent>
+	<requestHandler name="/suggest" class="solr.SearchHandler" startup="lazy">
+		<lst name="defaults">
+			<str name="df">text</str>
+			<str name="spellcheck">on</str>
+			<str name="spellcheck.dictionary">suggestions</str>
+			<str name="spellcheck.count">3</str>
+			<str name="spellcheck.collate">true</str>
+			<str name="spellcheck.maxCollations">3</str>
+		</lst>
+		<arr name="last-components">
+			<str>suggest</str>
+		</arr>
+	</requestHandler>
+	
 	<searchComponent name="tvComponent" class="solr.TermVectorComponent" />
 	<requestHandler name="/tvrh" class="solr.SearchHandler" startup="lazy">
 		<lst name="defaults">
