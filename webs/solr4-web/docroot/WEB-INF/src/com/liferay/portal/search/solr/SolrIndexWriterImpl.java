@@ -34,12 +34,17 @@ import java.util.Locale;
 import java.util.Map;
 
 import org.apache.solr.client.solrj.SolrServer;
+import org.apache.solr.client.solrj.SolrServerException;
 import org.apache.solr.common.SolrInputDocument;
+import org.apache.solr.common.params.ModifiableSolrParams;
 
 /**
  * @author Bruno Farache
  */
 public class SolrIndexWriterImpl implements IndexWriter {
+
+//  public class SolrIndexWriterImpl
+//      extends DelegatingSpellCheckIndexWriter implements IndexWriter {
 
 	public void addDocument(SearchContext searchContext, Document document)
 		throws SearchException {
@@ -175,6 +180,59 @@ public class SolrIndexWriterImpl implements IndexWriter {
 		}
 
 		addDocuments(searchContext, documents);
+	}
+
+	public void indexDictionaries(long companyId)
+		throws SearchException {
+
+		Locale[] locales = Locale.getAvailableLocales();
+
+		for(Locale locale: locales){
+			indexDictionary(companyId, locale);
+		}
+
+	}
+
+	public void indexDictionary(long companyId, Locale locale)
+		throws SearchException {
+
+		ModifiableSolrParams params = new ModifiableSolrParams();
+
+		String requestHandlerBase = "/spell_";
+		String requestHandler =
+			requestHandlerBase.concat(locale.getLanguage())
+				.concat(StringPool.UNDERLINE).concat(locale.getCountry());
+
+		params.set("qt", requestHandler);
+		params.set("spellcheck.reload", true);
+		params.set("spellcheck.build", true);
+
+		try {
+			_solrServer.query(params);
+		} catch (SolrServerException e) {
+			e.printStackTrace();
+		}
+
+	}
+
+	// TEST
+	public void indexQuery(String query)
+		throws SearchException {
+
+		Document document = new DocumentImpl();
+		document.addKeyword(Field.KEYWORD_SEARCH, query);
+    	//document.addKeyword(Field.SCORE, query);
+		//document.addKeyword(Field.COUNT, query);
+		document.addKeyword(Field.UID, query);
+
+		try {
+			_solrServer.add(getSolrInputDocument(document));
+			_solrServer.commit();
+		}
+		catch (Exception e) {
+			throw new SearchException(e.getMessage());
+		}
+
 	}
 
 	protected SolrInputDocument getSolrInputDocument(Document document) {

@@ -19,6 +19,7 @@ import com.liferay.portal.kernel.json.JSONArray;
 import com.liferay.portal.kernel.json.JSONObject;
 import com.liferay.portal.kernel.log.Log;
 import com.liferay.portal.kernel.log.LogFactoryUtil;
+import com.liferay.portal.kernel.search.DelegatingQuerySuggester;
 import com.liferay.portal.kernel.search.Document;
 import com.liferay.portal.kernel.search.DocumentImpl;
 import com.liferay.portal.kernel.search.Field;
@@ -48,8 +49,11 @@ import com.liferay.portal.search.solr.facet.SolrFacetQueryCollector;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -59,18 +63,22 @@ import org.apache.solr.client.solrj.SolrQuery.ORDER;
 import org.apache.solr.client.solrj.SolrQuery;
 import org.apache.solr.client.solrj.SolrRequest.METHOD;
 import org.apache.solr.client.solrj.SolrServer;
+import org.apache.solr.client.solrj.SolrServerException;
 import org.apache.solr.client.solrj.response.FacetField;
 import org.apache.solr.client.solrj.response.QueryResponse;
+import org.apache.solr.client.solrj.response.SpellCheckResponse;
 import org.apache.solr.common.SolrDocument;
 import org.apache.solr.common.SolrDocumentList;
 import org.apache.solr.common.params.FacetParams;
+import org.apache.solr.common.params.ModifiableSolrParams;
 
 /**
  * @author Bruno Farache
  * @author Zsolt Berentey
  * @author Raymond Augé
  */
-public class SolrIndexSearcherImpl implements IndexSearcher {
+public class SolrIndexSearcherImpl extends DelegatingQuerySuggester
+	implements IndexSearcher {
 
 	public Hits search(SearchContext searchContext, Query query)
 		throws SearchException {
@@ -219,6 +227,176 @@ public class SolrIndexSearcherImpl implements IndexSearcher {
 		return subset(
 			solrQuery, query, query.getQueryConfig(), queryResponse,
 			allResults);
+	}
+
+	public String spellCheckKeywords(SearchContext searchContext)
+		throws SearchException {
+
+		QueryConfig queryConfig = searchContext.getQueryConfig();
+		SolrQuery solrQuery = new SolrQuery();
+
+		if (queryConfig.isHighlightEnabled()) {
+			solrQuery.setHighlight(true);
+			solrQuery.setHighlightFragsize(
+				queryConfig.getHighlightFragmentSize());
+			solrQuery.setHighlightSnippets(
+				queryConfig.getHighlightSnippetSize());
+
+			String localizedContentName = DocumentImpl.getLocalizedName(
+				queryConfig.getLocale(), Field.CONTENT);
+
+			String localizedTitleName = DocumentImpl.getLocalizedName(
+				queryConfig.getLocale(), Field.TITLE);
+
+			solrQuery.set(
+				"hl.fl", Field.CONTENT, localizedContentName, Field.TITLE,
+				localizedTitleName);
+		}
+
+		Locale locale = searchContext.getLocale();
+
+		String requestHandlerBase = "/spell_";
+		String language = locale.getLanguage().concat(StringPool.UNDERLINE)
+			.concat(locale.getCountry());
+        String requestHandler = requestHandlerBase.concat(language);
+
+		solrQuery.setRequestHandler(requestHandler);
+		solrQuery.setParam("spellcheck.q", searchContext.getKeywords());
+		solrQuery.setParam("spellcheck.maxCollationTries", "0");
+		solrQuery.setParam("spellcheck.maxCollations", "1");
+
+		QueryResponse response = null;
+
+		try {
+			response = _solrServer.query(solrQuery);
+		} catch (SolrServerException e) {
+			e.printStackTrace();
+		}
+
+		String result = response.getSpellCheckResponse().getCollatedResult();
+
+		String[] test = suggestKeywordQueries(searchContext, 3);
+
+		return result;
+	}
+
+	public Map<String, List<String>> spellCheckKeywords(
+			SearchContext searchContext, int max)
+		throws SearchException {
+
+		QueryConfig queryConfig = searchContext.getQueryConfig();
+		SolrQuery solrQuery = new SolrQuery();
+
+		if (queryConfig.isHighlightEnabled()) {
+			solrQuery.setHighlight(true);
+			solrQuery.setHighlightFragsize(
+				queryConfig.getHighlightFragmentSize());
+			solrQuery.setHighlightSnippets(
+				queryConfig.getHighlightSnippetSize());
+
+			String localizedContentName = DocumentImpl.getLocalizedName(
+				queryConfig.getLocale(), Field.CONTENT);
+
+			String localizedTitleName = DocumentImpl.getLocalizedName(
+				queryConfig.getLocale(), Field.TITLE);
+
+			solrQuery.set(
+				"hl.fl", Field.CONTENT, localizedContentName, Field.TITLE,
+				localizedTitleName);
+		}
+
+		Locale locale = searchContext.getLocale();
+
+		String requestHandlerBase = "/spell_";
+		String language = locale.getLanguage().concat(StringPool.UNDERLINE)
+			.concat(locale.getCountry());
+		String requestHandler = requestHandlerBase.concat(language);
+
+		solrQuery.setParam("qt", requestHandler);
+		solrQuery.setParam("spellcheck.q", searchContext.getKeywords());
+		solrQuery.setParam("spellcheck.count", Integer.toString(max));
+
+		QueryResponse response = null;
+
+		try {
+			response = _solrServer.query(solrQuery);
+		} catch (SolrServerException e) {
+			e.printStackTrace();
+		}
+
+		SpellCheckResponse spellCheckResponse =
+			response.getSpellCheckResponse();
+		List<SpellCheckResponse.Suggestion> suggestions =
+			spellCheckResponse.getSuggestions();
+
+		Map<String, List<String>> results = new HashMap<String, List<String>>();
+
+		for (SpellCheckResponse.Suggestion suggestion : suggestions) {
+			results.put(suggestion.getToken(), suggestion.getAlternatives());
+		}
+
+		return results;
+
+	}
+
+	public String[] suggestKeywordQueries(
+			SearchContext searchContext, int max)
+		throws SearchException {
+
+		QueryConfig queryConfig = searchContext.getQueryConfig();
+		SolrQuery solrQuery = new SolrQuery();
+
+		if (queryConfig.isHighlightEnabled()) {
+			solrQuery.setHighlight(true);
+			solrQuery.setHighlightFragsize(
+				queryConfig.getHighlightFragmentSize());
+			solrQuery.setHighlightSnippets(
+				queryConfig.getHighlightSnippetSize());
+
+			String localizedContentName = DocumentImpl.getLocalizedName(
+				queryConfig.getLocale(), Field.CONTENT);
+
+			String localizedTitleName = DocumentImpl.getLocalizedName(
+				queryConfig.getLocale(), Field.TITLE);
+
+			solrQuery.set(
+				"hl.fl", Field.CONTENT, localizedContentName, Field.TITLE,
+				localizedTitleName);
+		}
+
+		StringBundler keyword = new StringBundler();
+
+		keyword.append(Field.KEYWORD_SEARCH);
+		keyword.append(StringPool.COLON);
+		keyword.append(StringPool.QUOTE);
+		keyword.append(searchContext.getKeywords());
+		keyword.append(StringPool.QUOTE);
+
+		solrQuery.setParam("qt", "/select");
+		solrQuery.setQuery(keyword.toString());
+		solrQuery.setRows(max);
+
+		QueryResponse response = null;
+		try {
+			response = _solrServer.query(solrQuery);
+		} catch (SolrServerException e) {
+			e.printStackTrace();
+		}
+
+		SolrDocumentList solrDocumentList =
+			response.getResults();
+		Iterator iterator = solrDocumentList.listIterator();
+		String[] results = new String[solrDocumentList.size()];
+		int i = 0;
+
+		for(SolrDocument solrDocument: solrDocumentList) {
+			results[i] =
+				(String)solrDocument.getFieldValue(Field.KEYWORD_SEARCH);
+			i++;
+		}
+
+		return results;
+
 	}
 
 	protected String getSnippet(
