@@ -22,16 +22,21 @@ import com.liferay.portal.kernel.search.SearchContext;
 import com.liferay.portal.kernel.search.SearchException;
 import com.liferay.portal.kernel.util.StringBundler;
 import com.liferay.portal.kernel.util.StringPool;
+import com.liferay.portal.search.solr.analyzer.DefaultAnalizer;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 
+import org.apache.lucene.search.spell.StringDistance;
 import org.apache.solr.client.solrj.SolrQuery;
+import org.apache.solr.client.solrj.SolrRequest;
 import org.apache.solr.client.solrj.SolrServer;
 import org.apache.solr.client.solrj.response.QueryResponse;
-import org.apache.solr.client.solrj.response.SpellCheckResponse;
 import org.apache.solr.common.SolrDocument;
 import org.apache.solr.common.SolrDocumentList;
 
@@ -40,87 +45,135 @@ import org.apache.solr.common.SolrDocumentList;
  */
 public class SolrQuerySuggesterImpl implements QuerySuggester {
 
+	public void searchTokenSimilars(
+			Locale locale, String original, SolrQuery solrQuery, String token,
+			Map<String, Float> words)
+		throws SearchException {
+
+		solrQuery.addFilterQuery("spellcheck:true");
+		solrQuery.addFilterQuery("locale:" + locale.toString());
+
+		try {
+			QueryResponse queryResponse = _solrServer.query(
+				solrQuery, SolrRequest.METHOD.POST);
+
+			SolrDocumentList solrDocumentList = queryResponse.getResults();
+
+			int numResults = solrDocumentList.size();
+
+			Map<String, Float> tokenSuggestions = new HashMap<String, Float>();
+
+			boolean foundWord = false;
+
+			for (int i = 0; i < numResults; i++) {
+
+				SolrDocument solrDocument = solrDocumentList.get(i);
+
+				String suggestion =
+					((List<String>)solrDocument.get("word")).get(0);
+
+				String strWeight =
+					((List<String>)solrDocument.get("weight")).get(0);
+				float weight = Float.parseFloat(strWeight);
+
+				if (suggestion.equalsIgnoreCase(token)) {
+					words.put(original, weight);
+					foundWord = true;
+					break;
+				}
+
+				float distance = _stringDistance.getDistance(token, suggestion);
+
+				if (distance > _threshold) {
+					Float normalizedWeight = weight + distance;
+					tokenSuggestions.put(suggestion, normalizedWeight);
+				}
+			}
+
+			if (!foundWord) {
+				if (tokenSuggestions.isEmpty()) {
+					words.put(original, 0f);
+				}
+				else {
+					words.putAll(tokenSuggestions);
+				}
+			}
+		}
+		catch (Exception e) {
+			if (_log.isDebugEnabled()) {
+				_log.debug("Unable to execute Solr query", e);
+			}
+
+			throw new SearchException(e.getMessage());
+		}
+
+	}
+
 	public void setSolrServer(SolrServer solrServer) {
 		_solrServer = solrServer;
 	}
 
-	public void setSpellCheckURLPrefix(String spellCheckURLPrefix) {
-		_spellCheckURLPrefix = spellCheckURLPrefix;
-	}
-
-	public void setSuggesterURL(String suggesterURL) {
-		_suggesterURL = suggesterURL;
+	public void setStringDistance(StringDistance stringDistance) {
+		_stringDistance = stringDistance;
 	}
 
 	public String spellCheckKeywords(SearchContext searchContext)
 		throws SearchException {
 
-		Map<String, String> additionalQueryParameters =
-			new HashMap<String, String>();
+		String collated = StringPool.BLANK;
 
-		additionalQueryParameters.put("spellcheck.collate", "true");
-		additionalQueryParameters.put("spellcheck.maxCollationTries", "0");
-		additionalQueryParameters.put("spellcheck.maxCollations", "1");
+		Map<String, List<String>> map = spellCheckKeywords(searchContext, 1);
 
-		SolrQuery solrQuery = createSpellCheckQuery(
-			searchContext, additionalQueryParameters);
+		String keywords = searchContext.getKeywords();
+		List<String> tokens = DefaultAnalizer.tokenize(keywords);
 
-		try {
-			QueryResponse queryResponse = _solrServer.query(solrQuery);
+		for (String token : tokens) {
+			if (!map.get(token).isEmpty()) {
 
-			SpellCheckResponse spellCheckResponse =
-				queryResponse.getSpellCheckResponse();
+				String suggestion = map.get(token).get(0);
 
-			return spellCheckResponse.getCollatedResult();
-		}
-		catch (Exception e) {
-			if (_log.isDebugEnabled()) {
-				_log.debug("Unable to execute Solr query", e);
+				if (Character.isUpperCase(token.charAt(0))) {
+					suggestion = suggestion.substring(0, 1).toUpperCase()
+						.concat(suggestion.substring(1));
+				}
+
+				collated = collated.concat(suggestion)
+					.concat(StringPool.SPACE);
 			}
-
-			throw new SearchException(e.getMessage());
+			else {
+				collated = collated.concat(token).concat(StringPool.SPACE);
+			}
 		}
+
+		if (!collated.equals(StringPool.BLANK)) {
+			collated = collated.substring(0, collated.length()-1);
+		}
+
+		return collated;
 	}
 
 	public Map<String, List<String>> spellCheckKeywords(
-			SearchContext searchContext, int max)
+			SearchContext searchContext, int maxSuggestions)
 		throws SearchException {
 
-		Map<String, String> additionalQueryParameters =
-					new HashMap<String, String>();
+		Map<String, List<String>> suggestions =
+			new HashMap<String, List<String>>();
 
-		additionalQueryParameters.put(
-			"spellcheck.count", Integer.toString(max));
+		Locale locale = searchContext.getLocale();
 
-		SolrQuery solrQuery = createSpellCheckQuery(
-			searchContext, additionalQueryParameters);
+		List<String> originals = DefaultAnalizer.tokenize(
+			searchContext.getKeywords());
 
-		try {
-			QueryResponse queryResponse = _solrServer.query(solrQuery);
+		for (String original : originals) {
+			String token = original;
 
-			SpellCheckResponse spellCheckResponse =
-				queryResponse.getSpellCheckResponse();
+			List<String> similarTokens = suggestTokenSimilars(
+				locale, maxSuggestions, original, token);
 
-			List<SpellCheckResponse.Suggestion> suggestions =
-				spellCheckResponse.getSuggestions();
-
-			Map<String, List<String>> spellCheckResults =
-				new HashMap<String, List<String>>();
-
-			for (SpellCheckResponse.Suggestion suggestion : suggestions) {
-				spellCheckResults.put(
-					suggestion.getToken(), suggestion.getAlternatives());
-			}
-
-			return spellCheckResults;
+			suggestions.put(original, similarTokens);
 		}
-		catch (Exception e) {
-			if (_log.isDebugEnabled()) {
-				_log.debug("Unable to execute Solr query", e);
-			}
 
-			throw new SearchException(e.getMessage());
-		}
+		return suggestions;
 	}
 
 	public String[] suggestKeywordQueries(SearchContext searchContext, int max)
@@ -139,6 +192,12 @@ public class SolrQuerySuggesterImpl implements QuerySuggester {
 		solrQuery.setRequestHandler(_suggesterURL);
 		solrQuery.setQuery(sb.toString());
 		solrQuery.setRows(max);
+
+		String companyIdFilterQuery = Field.COMPANY_ID.concat(
+			StringPool.COLON).concat(
+			Long.toString(searchContext.getCompanyId()));
+
+		solrQuery.setFilterQueries(companyIdFilterQuery);
 
 		try {
 			QueryResponse queryResponse = _solrServer.query(solrQuery);
@@ -167,35 +226,101 @@ public class SolrQuerySuggesterImpl implements QuerySuggester {
 		}
 	}
 
-	protected SolrQuery createSpellCheckQuery(
-		SearchContext searchContext,
-		Map<String, String> additionalQueryParameters) {
+	public List<String> suggestTokenSimilars(
+			Locale locale, int maxSuggestions, String original, String token)
+		throws SearchException {
+
+		DefaultAnalizer result = DefaultAnalizer.analyze(token);
 
 		SolrQuery solrQuery = new SolrQuery();
 
-		Locale locale = searchContext.getLocale();
+		StringBundler sb =new StringBundler(10);
 
-		String requestHandler = _spellCheckURLPrefix.concat(
-			StringPool.UNDERLINE).concat(locale.toString());
+		sb.append(addGramsQuery("gram2", result.gram2s));
+		sb.append(addGramsQuery("gram3", result.gram3s));
+		sb.append(addGramsQuery("gram4", result.gram4s));
 
-		solrQuery.setRequestHandler(requestHandler);
-		solrQuery.setParam("spellcheck.q", searchContext.getKeywords());
+		sb.append(addGramQuery("start2", result.start2));
+		sb.append(addGramQuery("start3", result.start3));
+		sb.append(addGramQuery("start4", result.start4));
 
-		for (Map.Entry<String, String> additionalQueryParameter :
-				additionalQueryParameters.entrySet()) {
+		sb.append(addGramQuery("end2", result.end2));
+		sb.append(addGramQuery("end3", result.end3));
+		sb.append(addGramQuery("end4", result.end4));
 
-			solrQuery.setParam(
-				additionalQueryParameter.getKey(),
-				additionalQueryParameter.getValue());
-		}
+		String wordQuery = "word".concat(StringPool.COLON).concat(result.input);
 
-		return solrQuery;
+		sb.append(wordQuery);
+
+		solrQuery.setQuery(sb.toString());
+
+		Map<String, Float> words = new HashMap<String, Float>();
+
+		searchTokenSimilars(locale, original, solrQuery, token, words);
+
+		ValueComparator bvc = new ValueComparator(words);
+		TreeMap<String, Float> sortedWords = new TreeMap<String, Float>(bvc);
+
+		sortedWords.putAll(words);
+
+		List<String> listWords = new ArrayList(sortedWords.keySet());
+
+		return listWords.subList(0, Math.min(maxSuggestions, listWords.size()));
+
 	}
 
-	private static Log _log = LogFactoryUtil.getLog(SolrQuerySuggesterImpl.class);
+	private String addGramQuery(String fieldName, String fieldValue) {
+
+		StringBundler sb =new StringBundler(6);
+
+		sb.append(fieldName);
+		sb.append(StringPool.COLON);
+		sb.append(fieldValue);
+		sb.append(StringPool.SPACE);
+		sb.append("OR");
+		sb.append(StringPool.SPACE);
+
+		return sb.toString();
+	}
+
+	private String addGramsQuery(String fieldName, List<String> grams) {
+
+		StringBundler sb = new StringBundler(grams.size());
+
+		for (String gram : grams) {
+			sb.append(addGramQuery(fieldName, gram));
+		}
+
+		return sb.toString();
+	}
+
+	private static Log _log = LogFactoryUtil.getLog(
+		SolrQuerySuggesterImpl.class);
 
 	private SolrServer _solrServer;
-	private String _spellCheckURLPrefix = "/liferay_spellCheck";
+
+	private StringDistance _stringDistance;
+
 	private String _suggesterURL = "/select";
+
+	private float _threshold = 0.8f;
+
+	private class ValueComparator implements Comparator<String> {
+
+		Map<String, Float> base;
+		public ValueComparator(Map<String, Float> base) {
+			this.base = base;
+		}
+
+		public int compare(String a, String b) {
+			if (base.get(a) >= base.get(b)) {
+				return -1;
+			}
+			else {
+				return 1;
+			}
+		}
+
+	}
 
 }
