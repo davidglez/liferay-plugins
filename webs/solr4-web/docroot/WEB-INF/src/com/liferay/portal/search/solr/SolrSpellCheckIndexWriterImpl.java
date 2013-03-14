@@ -29,7 +29,9 @@ import java.io.File;
 import java.io.FileReader;
 
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.solr.client.solrj.SolrServer;
@@ -38,7 +40,8 @@ import org.apache.solr.common.SolrInputDocument;
 /**
  * @author Michael C. Han
  */
-public class SolrSpellCheckIndexWriterImpl implements SpellCheckIndexWriter {
+public class SolrSpellCheckIndexWriterImpl extends SolrSpellCheckBaseImpl
+	implements SpellCheckIndexWriter {
 
 	public void deleteDocuments() throws SearchException {
 		try {
@@ -53,7 +56,112 @@ public class SolrSpellCheckIndexWriterImpl implements SpellCheckIndexWriter {
 		}
 	}
 
-	public void doIndexDictionary(File file, Locale locale)
+	public void indexDictionaries(SearchContext searchContext)
+		throws SearchException {
+
+		deleteDocuments();
+
+		for (String supportedLocale : _supportedLocales) {
+			searchContext.setLocale(LocaleUtil.fromLanguageId(supportedLocale));
+
+			indexDictionary(searchContext);
+		}
+	}
+
+	public void indexDictionary(SearchContext searchContext)
+		throws SearchException {
+
+		Locale locale = searchContext.getLocale();
+		String strLocale = locale.toString();
+
+		String dictionaryDir = PortletProps.get(DICTIONARY_DIRECTORY);
+		String dictionaryRelativePath = dictionaryDir.concat(
+			strLocale).concat(DICTIONARY_EXTENSION_FILE);
+
+		String dictionaryCompletePath =
+			SolrSpellCheckIndexWriterImpl.class.getClassLoader()
+				.getResource(dictionaryRelativePath).getFile();
+        File fileExternal = new File(dictionaryCompletePath);
+        doIndexDictionary(fileExternal, locale);
+
+		StringBundler customRelativePath = new StringBundler(5);
+		String customDir = PortletProps.get(DICTIONARY_DIRECTORY);
+		customRelativePath.append(customDir);
+		customRelativePath.append(CUSTOM_PREFIX);
+		customRelativePath.append(StringPool.UNDERLINE);
+		customRelativePath.append(strLocale);
+		customRelativePath.append(CUSTOM_EXTENSION_FILE);
+
+		String customCompletePath =
+			SolrSpellCheckIndexWriterImpl.class.getClassLoader()
+				.getResource(customRelativePath.toString()).getFile();
+        File fileCustom = new File(customCompletePath);
+        doIndexDictionary(fileCustom, locale);
+	}
+
+	public void setCommit(boolean commit) {
+		_commit = commit;
+	}
+
+	public void setSolrServer(SolrServer solrServer) {
+		_solrServer = solrServer;
+	}
+
+	public void setSupportedLocales(Set<String> supportedLocales) {
+		_supportedLocales = supportedLocales;
+	}
+
+	private void addDocument(Set<SolrInputDocument> solrDocuments,
+			Locale locale, String token, int weight)
+		throws SearchException {
+
+		int length = token.length();
+
+		SolrInputDocument solrInputDocument = new SolrInputDocument();
+
+		StringBundler sb = new StringBundler(6);
+		sb.append("spellcheck");
+		sb.append(StringPool.UNDERLINE);
+		sb.append(token);
+		sb.append(StringPool.UNDERLINE);
+		sb.append(locale.toString());
+
+		solrInputDocument.addField("uid", sb.toString());
+		solrInputDocument.addField("spellcheck", true);
+		solrInputDocument.addField("word", token);
+		solrInputDocument.addField("weight", String.valueOf(weight));
+		solrInputDocument.addField("locale", locale.toString());
+
+		addGram(solrInputDocument, token, getMin(length), getMax(length));
+
+		solrDocuments.add(solrInputDocument);
+	}
+
+	private void addGram(
+			SolrInputDocument solrInputDocument, String text, int ng1, int ng2)
+		throws SearchException {
+
+		Map<String, Object> nGramsMap = buildNGrams(text, ng1, ng2);
+
+		for (Map.Entry entry : nGramsMap.entrySet()) {
+			String key = (String)entry.getKey();
+
+			if (entry.getValue() instanceof String) {
+				solrInputDocument.addField(key, entry.getValue());
+			}
+
+			else if (entry.getValue() instanceof List) {
+				List<String> ngrams = (List)entry.getValue();
+
+				for (String ngram : ngrams) {
+					solrInputDocument.addField(key, ngram);
+				}
+			}
+
+		}
+	}
+
+	private void doIndexDictionary(File file, Locale locale)
 		throws SearchException {
 
 		Set<SolrInputDocument> docs = new HashSet<SolrInputDocument>();
@@ -71,7 +179,7 @@ public class SolrSpellCheckIndexWriterImpl implements SpellCheckIndexWriter {
 				}
 
 				addDocument(docs, locale, term[0], weight);
-				if (i == _BATCH_NUM) {
+				if (i == BATCH_NUM) {
 					_solrServer.add(docs);
 					if (_commit) {
 						_solrServer.commit();
@@ -100,146 +208,12 @@ public class SolrSpellCheckIndexWriterImpl implements SpellCheckIndexWriter {
 		}
 	}
 
-	public void indexDictionaries(SearchContext searchContext)
-		throws SearchException {
+	private static final int BATCH_NUM = 10000;
 
-		deleteDocuments();
-
-		for (String supportedLocale : _supportedLocales) {
-			searchContext.setLocale(LocaleUtil.fromLanguageId(supportedLocale));
-
-			indexDictionary(searchContext);
-		}
-	}
-
-	public void indexDictionary(SearchContext searchContext)
-		throws SearchException {
-
-		Locale locale = searchContext.getLocale();
-		String strLocale = locale.toString();
-
-		String dictionaryDir = PortletProps.get(_DICTIONARY_DIRECTORY);
-		String dictionaryRelativePath = dictionaryDir.concat(
-			strLocale).concat(_DICTIONARY_EXTENSION_FILE);
-		String dictionaryCompletePath =
-			SolrSpellCheckIndexWriterImpl.class.getClassLoader()
-				.getResource(dictionaryRelativePath).getFile();
-
-		File fileExternal = new File(dictionaryCompletePath);
-
-		doIndexDictionary(fileExternal, locale);
-
-		String customDir = PortletProps.get(_DICTIONARY_DIRECTORY);
-
-		StringBundler customRelativePath = new StringBundler(5);
-
-		customRelativePath.append(customDir);
-		customRelativePath.append(_CUSTOM_PREFIX);
-		customRelativePath.append(StringPool.UNDERLINE);
-		customRelativePath.append(strLocale);
-		customRelativePath.append(_CUSTOM_EXTENSION_FILE);
-
-		String customCompletePath =
-			SolrSpellCheckIndexWriterImpl.class.getClassLoader()
-				.getResource(customRelativePath.toString()).getFile();
-
-		File fileCustom = new File(customCompletePath);
-
-		doIndexDictionary(fileCustom, locale);
-	}
-
-	public void setCommit(boolean commit) {
-		_commit = commit;
-	}
-
-	public void setSolrServer(SolrServer solrServer) {
-		_solrServer = solrServer;
-	}
-
-	public void setSupportedLocales(Set<String> supportedLocales) {
-		_supportedLocales = supportedLocales;
-	}
-
-	protected static void addDocument(
-		Set<SolrInputDocument> solrDocuments, Locale locale, String token,
-		int weight) {
-
-		int length = token.length();
-
-		SolrInputDocument solrInputDocument = new SolrInputDocument();
-
-		solrInputDocument.addField(
-			"uid", "spellcheck" + token + locale.toString());
-
-		solrInputDocument.addField("spellcheck", true);
-		solrInputDocument.addField("word", token);
-		solrInputDocument.addField("weight", String.valueOf(weight));
-
-		if (locale != null) {
-			solrInputDocument.addField("locale", locale.toString());
-		}
-
-		addGram(solrInputDocument, token, getMin(length), getMax(length));
-
-		solrDocuments.add(solrInputDocument);
-	}
-
-	private static void addGram(
-		SolrInputDocument solrInputDocument, String text, int ng1, int ng2) {
-
-		int len = text.length();
-
-		for (int ng = ng1; ng <= ng2; ng++) {
-
-			String key = "gram" + ng;
-			String end = null;
-
-			for (int i = 0; i < len - ng + 1; i++) {
-
-				String gram = text.substring(i, i + ng);
-				solrInputDocument.addField(key, gram);
-				if (i == 0) {
-
-					solrInputDocument.addField("start" + ng, gram);
-				}
-
-				end = gram;
-			}
-
-			if (end != null) {
-
-				solrInputDocument.addField("end" + ng, end);
-			}
-		}
-	}
-
-	private static int getMax(int l) {
-		if (l > 5) {
-			return 4;
-		}
-		else {
-			return 3;
-		}
-	}
-
-	private static int getMin(int l) {
-		if (l > 5) {
-			return 3;
-		}
-		else {
-			return 2;
-		}
-	}
-
-	private static final int _BATCH_NUM = 1000;
-
-	private static final String _CUSTOM_EXTENSION_FILE =".txt";
-
-	private static final String _CUSTOM_PREFIX ="custom";
-
-	private static final String _DICTIONARY_DIRECTORY = "dictionary.directory";
-
-	private static final String _DICTIONARY_EXTENSION_FILE =".txt";
+	private static final String CUSTOM_EXTENSION_FILE =".txt";
+	private static final String CUSTOM_PREFIX ="custom";
+	private static final String DICTIONARY_DIRECTORY = "dictionaries.directory";
+	private static final String DICTIONARY_EXTENSION_FILE =".txt";
 
 	private static Log _log = LogFactoryUtil.getLog(
 		SolrSpellCheckIndexWriterImpl.class);

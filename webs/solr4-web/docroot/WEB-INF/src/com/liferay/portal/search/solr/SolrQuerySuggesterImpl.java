@@ -22,7 +22,9 @@ import com.liferay.portal.kernel.search.SearchContext;
 import com.liferay.portal.kernel.search.SearchException;
 import com.liferay.portal.kernel.util.StringBundler;
 import com.liferay.portal.kernel.util.StringPool;
-import com.liferay.portal.search.solr.analyzer.DefaultAnalizer;
+
+import java.io.IOException;
+import java.io.StringReader;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -32,6 +34,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
 
+import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.search.spell.StringDistance;
 import org.apache.solr.client.solrj.SolrQuery;
 import org.apache.solr.client.solrj.SolrRequest;
@@ -43,11 +47,11 @@ import org.apache.solr.common.SolrDocumentList;
 /**
  * @author Michael C. Han
  */
-public class SolrQuerySuggesterImpl implements QuerySuggester {
+public class SolrQuerySuggesterImpl extends SolrSpellCheckBaseImpl
+	implements QuerySuggester {
 
-	public void searchTokenSimilars(
-			Locale locale, String original, SolrQuery solrQuery, String token,
-			Map<String, Float> words)
+	public void searchTokenSimilars(Locale locale, String token,
+			SolrQuery solrQuery, Map<String, Float> words)
 		throws SearchException {
 
 		solrQuery.addFilterQuery("spellcheck:true");
@@ -71,13 +75,12 @@ public class SolrQuerySuggesterImpl implements QuerySuggester {
 
 				String suggestion =
 					((List<String>)solrDocument.get("word")).get(0);
-
 				String strWeight =
 					((List<String>)solrDocument.get("weight")).get(0);
 				float weight = Float.parseFloat(strWeight);
 
 				if (suggestion.equalsIgnoreCase(token)) {
-					words.put(original, weight);
+					words.put(token, weight);
 					foundWord = true;
 					break;
 				}
@@ -92,7 +95,7 @@ public class SolrQuerySuggesterImpl implements QuerySuggester {
 
 			if (!foundWord) {
 				if (tokenSuggestions.isEmpty()) {
-					words.put(original, 0f);
+					words.put(token, 0f);
 				}
 				else {
 					words.putAll(tokenSuggestions);
@@ -109,6 +112,10 @@ public class SolrQuerySuggesterImpl implements QuerySuggester {
 
 	}
 
+	public void setCollationMaker(CollationMaker collationMaker) {
+		_collationMaker = collationMaker;
+	}
+
 	public void setSolrServer(SolrServer solrServer) {
 		_solrServer = solrServer;
 	}
@@ -117,58 +124,36 @@ public class SolrQuerySuggesterImpl implements QuerySuggester {
 		_stringDistance = stringDistance;
 	}
 
+	public void setThreshold(float threshold) {
+		_threshold = threshold;
+	}
+
 	public String spellCheckKeywords(SearchContext searchContext)
 		throws SearchException {
 
-		String collated = StringPool.BLANK;
+		Map<String, List<String>> mapSuggestions = spellCheckKeywords(
+			searchContext, 1);
 
-		Map<String, List<String>> map = spellCheckKeywords(searchContext, 1);
+		List<String> tokens = tokenize(
+			searchContext.getKeywords(), searchContext.getLocale());
 
-		String keywords = searchContext.getKeywords();
-		List<String> tokens = DefaultAnalizer.tokenize(keywords);
-
-		for (String token : tokens) {
-			if (!map.get(token).isEmpty()) {
-
-				String suggestion = map.get(token).get(0);
-
-				if (Character.isUpperCase(token.charAt(0))) {
-					suggestion = suggestion.substring(0, 1).toUpperCase()
-						.concat(suggestion.substring(1));
-				}
-
-				collated = collated.concat(suggestion)
-					.concat(StringPool.SPACE);
-			}
-			else {
-				collated = collated.concat(token).concat(StringPool.SPACE);
-			}
-		}
-
-		if (!collated.equals(StringPool.BLANK)) {
-			collated = collated.substring(0, collated.length()-1);
-		}
-
-		return collated;
+		return _collationMaker.createCollation(mapSuggestions, tokens);
 	}
 
 	public Map<String, List<String>> spellCheckKeywords(
 			SearchContext searchContext, int maxSuggestions)
 		throws SearchException {
 
-		Map<String, List<String>> suggestions =
-			new HashMap<String, List<String>>();
+		Map<String, List<String>> suggestions =	new HashMap<String, List<String>>();
 
 		Locale locale = searchContext.getLocale();
 
-		List<String> originals = DefaultAnalizer.tokenize(
-			searchContext.getKeywords());
+		List<String> originals = tokenize(searchContext.getKeywords(), locale);
 
 		for (String original : originals) {
-			String token = original;
 
 			List<String> similarTokens = suggestTokenSimilars(
-				locale, maxSuggestions, original, token);
+				locale, maxSuggestions, original);
 
 			suggestions.put(original, similarTokens);
 		}
@@ -227,39 +212,21 @@ public class SolrQuerySuggesterImpl implements QuerySuggester {
 	}
 
 	public List<String> suggestTokenSimilars(
-			Locale locale, int maxSuggestions, String original, String token)
+			Locale locale, int maxSuggestions, String token)
 		throws SearchException {
 
-		DefaultAnalizer result = DefaultAnalizer.analyze(token);
+		int length = token.length();
+		Map<String, Object> nGramsMap =
+			buildNGrams(token, getMin(length), getMax(length));
 
-		SolrQuery solrQuery = new SolrQuery();
-
-		StringBundler sb =new StringBundler(10);
-
-		sb.append(addGramsQuery("gram2", result.gram2s));
-		sb.append(addGramsQuery("gram3", result.gram3s));
-		sb.append(addGramsQuery("gram4", result.gram4s));
-
-		sb.append(addGramQuery("start2", result.start2));
-		sb.append(addGramQuery("start3", result.start3));
-		sb.append(addGramQuery("start4", result.start4));
-
-		sb.append(addGramQuery("end2", result.end2));
-		sb.append(addGramQuery("end3", result.end3));
-		sb.append(addGramQuery("end4", result.end4));
-
-		String wordQuery = "word".concat(StringPool.COLON).concat(result.input);
-
-		sb.append(wordQuery);
-
-		solrQuery.setQuery(sb.toString());
+		SolrQuery solrQuery = createGramsQuery(nGramsMap, token);
 
 		Map<String, Float> words = new HashMap<String, Float>();
 
-		searchTokenSimilars(locale, original, solrQuery, token, words);
+		searchTokenSimilars(locale, token, solrQuery, words);
 
-		ValueComparator bvc = new ValueComparator(words);
-		TreeMap<String, Float> sortedWords = new TreeMap<String, Float>(bvc);
+		ValueComparator valueComparator = new ValueComparator(words);
+		TreeMap<String, Float> sortedWords = new TreeMap<String, Float>(valueComparator);
 
 		sortedWords.putAll(words);
 
@@ -294,8 +261,64 @@ public class SolrQuerySuggesterImpl implements QuerySuggester {
 		return sb.toString();
 	}
 
+	private SolrQuery createGramsQuery(
+		Map<String, Object> nGramsMap, String token) {
+
+		SolrQuery solrQuery = new SolrQuery();
+		StringBundler sb = new StringBundler(10);
+
+		for (Map.Entry entry : nGramsMap.entrySet()) {
+			String key = (String)entry.getKey();
+
+			if (entry.getValue() instanceof String) {
+				sb.append(addGramQuery(key, (String)entry.getValue()));
+			}
+
+			else if (entry.getValue() instanceof List) {
+				sb.append(addGramsQuery(key, (List)entry.getValue()));
+			}
+		}
+
+		String wordQuery = "word".concat(StringPool.COLON).concat(token);
+		sb.append(wordQuery);
+
+		solrQuery.setQuery(sb.toString());
+
+		return solrQuery;
+	}
+
+	private List<String> tokenize(String keyword, Locale locale)
+		throws SearchException {
+
+		List<String> result = new ArrayList<String>();
+
+		try {
+			TokenStream tokenStream = _analyzer.tokenStream(
+				locale.toString(), new StringReader(keyword));
+
+			CharTermAttribute charTermAttribute = tokenStream.addAttribute(
+				CharTermAttribute.class);
+
+			tokenStream.reset();
+
+			while (tokenStream.incrementToken()) {
+				result.add(charTermAttribute.toString());
+			}
+
+			tokenStream.end();
+			tokenStream.close();
+		}
+		catch (IOException e) {
+			throw new SearchException(e);
+		}
+
+		return result;
+	}
+
 	private static Log _log = LogFactoryUtil.getLog(
 		SolrQuerySuggesterImpl.class);
+
+	private CollationMaker _collationMaker;
 
 	private SolrServer _solrServer;
 
@@ -304,23 +327,5 @@ public class SolrQuerySuggesterImpl implements QuerySuggester {
 	private String _suggesterURL = "/select";
 
 	private float _threshold = 0.8f;
-
-	private class ValueComparator implements Comparator<String> {
-
-		Map<String, Float> base;
-		public ValueComparator(Map<String, Float> base) {
-			this.base = base;
-		}
-
-		public int compare(String a, String b) {
-			if (base.get(a) >= base.get(b)) {
-				return -1;
-			}
-			else {
-				return 1;
-			}
-		}
-
-	}
 
 }
