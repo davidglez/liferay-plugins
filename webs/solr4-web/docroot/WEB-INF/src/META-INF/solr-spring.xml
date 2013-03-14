@@ -6,8 +6,8 @@
 	xmlns="http://www.springframework.org/schema/beans"
 	xmlns:util="http://www.springframework.org/schema/util"
 	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd http://www.springframework.org/schema/util http://www.springframework.org/schema/util/spring-util-3.0.xsd"
->
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd http://www.springframework.org/schema/util http://www.springframework.org/schema/util/spring-util-3.0.xsd http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd"
+	xmlns:context="http://www.springframework.org/schema/context">
 	<bean class="com.liferay.portal.spring.context.PortletBeanFactoryPostProcessor" />
 
 	<!-- Solr search engine client -->
@@ -54,6 +54,7 @@
 	</bean>
 	<bean id="com.liferay.portal.search.solr.SolrSpellCheckIndexWriterImpl" class="com.liferay.portal.search.solr.SolrSpellCheckIndexWriterImpl">
 		<property name="commit" value="true" />
+		<property name="analyzer" ref="com.liferay.portal.search.solr.analysis.SolrAnalyzer" />
 		<property name="solrServer" ref="com.liferay.portal.search.solr.server.BasicAuthSolrServer" />
 		<property name="supportedLocales">
 			<util:set>
@@ -63,10 +64,15 @@
 		</property>
 	</bean>
 	<bean id="com.liferay.portal.search.solr.SolrQuerySuggesterImpl" class="com.liferay.portal.search.solr.SolrQuerySuggesterImpl">
+		<property name="analyzer" ref="com.liferay.portal.search.solr.analysis.SolrAnalyzer" />
+		<property name="collationMaker">
+			<bean id="com.liferay.portal.search.solr.CollationMaker" class="com.liferay.portal.search.solr.SolrCollationMaker" />
+		</property>
 		<property name="solrServer" ref="com.liferay.portal.search.solr.server.BasicAuthSolrServer" />
 		<property name="stringDistance">
 			<bean id="org.apache.lucene.search.spell.StringDistance" class="org.apache.lucene.search.spell.JaroWinklerDistance" />
 		</property>
+		<property name="threshold" value="0.8f" />
 	</bean>
 
 	<!-- Configurator -->
@@ -78,4 +84,68 @@
 			</util:map>
 		</property>
 	</bean>
+
+	<!-- Solr Analyzers -->
+
+	<bean id="com.liferay.portal.search.solr.analysis.SolrAnalyzer" class="com.liferay.portal.search.solr.analysis.SolrAnalyzer">
+		<constructor-arg>
+			<ref bean="org.apache.lucene.analysis.WhitespaceAnalyzer" />
+		</constructor-arg>
+		<constructor-arg>
+			<util:map map-class="java.util.LinkedHashMap">
+				<entry key="ar" value-ref="org.apache.lucene.analysis.ar.ArabicAnalyzer" />
+				<entry key="de_DE" value-ref="org.apache.lucene.analysis.de.GermanAnalyzer" />
+				<entry key="el_GR" value-ref="org.apache.lucene.analysis.el.GreekAnalyzer" />
+				<entry key="fa_IR" value-ref="org.apache.lucene.analysis.fa.PersianAnalyzer" />
+				<entry key="fr_[A-Z]{2}" value-ref="org.apache.lucene.analysis.fr.FrenchAnalyzer" />
+				<entry key="ja_JP" value-ref="org.apache.lucene.analysis.cjk.CJKAnalyzer" />
+				<entry key="ko_KR" value-ref="org.apache.lucene.analysis.cjk.CJKAnalyzer" />
+				<entry key="nl_NL" value-ref="org.apache.lucene.analysis.nl.DutchAnalyzer" />
+				<entry key="pt_BR" value-ref="org.apache.lucene.analysis.br.BrazilianAnalyzer" />
+				<entry key="ru_RU" value-ref="org.apache.lucene.analysis.ru.RussianAnalyzer" />
+				<entry key="zh_CN" value-ref="org.apache.lucene.analysis.cjk.CJKAnalyzer" />
+				<entry key="zh_TW" value-ref="org.apache.lucene.analysis.cjk.CJKAnalyzer" />
+			</util:map>
+		</constructor-arg>
+	</bean>
+	<bean id="com.liferay.portal.search.lucene.LikeKeywordAnalyzer" class="com.liferay.portal.search.lucene.LikeKeywordAnalyzer" />
+	<bean id="org.apache.lucene.analysis.KeywordAnalyzer" class="org.apache.lucene.analysis.KeywordAnalyzer" />
+	<bean id="org.apache.lucene.analysis.WhitespaceAnalyzer" class="org.apache.lucene.analysis.WhitespaceAnalyzer" />
+	<bean id="org.apache.lucene.analysis.ar.ArabicAnalyzer" class="org.apache.lucene.analysis.ar.ArabicAnalyzer">
+		<constructor-arg ref="org.apache.lucene.util.Version" />
+	</bean>
+	<bean id="org.apache.lucene.analysis.br.BrazilianAnalyzer" class="org.apache.lucene.analysis.br.BrazilianAnalyzer">
+		<constructor-arg ref="org.apache.lucene.util.Version" />
+	</bean>
+	<bean id="org.apache.lucene.analysis.cjk.CJKAnalyzer" class="org.apache.lucene.analysis.cjk.CJKAnalyzer">
+		<constructor-arg ref="org.apache.lucene.util.Version" />
+	</bean>
+	<bean id="org.apache.lucene.analysis.cz.CzechAnalyzer" class="org.apache.lucene.analysis.cz.CzechAnalyzer">
+		<constructor-arg ref="org.apache.lucene.util.Version" />
+	</bean>
+	<bean id="org.apache.lucene.analysis.nl.DutchAnalyzer" class="org.apache.lucene.analysis.nl.DutchAnalyzer">
+		<constructor-arg ref="org.apache.lucene.util.Version" />
+	</bean>
+	<bean id="org.apache.lucene.analysis.fr.FrenchAnalyzer" class="org.apache.lucene.analysis.fr.FrenchAnalyzer">
+		<constructor-arg ref="org.apache.lucene.util.Version" />
+	</bean>
+	<bean id="org.apache.lucene.analysis.de.GermanAnalyzer" class="org.apache.lucene.analysis.de.GermanAnalyzer">
+		<constructor-arg ref="org.apache.lucene.util.Version" />
+	</bean>
+	<bean id="org.apache.lucene.analysis.el.GreekAnalyzer" class="org.apache.lucene.analysis.el.GreekAnalyzer">
+		<constructor-arg ref="org.apache.lucene.util.Version" />
+	</bean>
+	<bean id="org.apache.lucene.analysis.fa.PersianAnalyzer" class="org.apache.lucene.analysis.fa.PersianAnalyzer">
+		<constructor-arg ref="org.apache.lucene.util.Version" />
+	</bean>
+	<bean id="org.apache.lucene.analysis.ru.RussianAnalyzer" class="org.apache.lucene.analysis.ru.RussianAnalyzer">
+		<constructor-arg ref="org.apache.lucene.util.Version" />
+	</bean>
+	<bean id="org.apache.lucene.analysis.standard.StandardAnalyzer" class="org.apache.lucene.analysis.standard.StandardAnalyzer">
+		<constructor-arg ref="org.apache.lucene.util.Version" />
+	</bean>
+	<bean id="org.apache.lucene.util.Version" class="org.apache.lucene.util.Version" factory-method="valueOf">
+		<constructor-arg value="LUCENE_35" />
+	</bean>
+
 </beans>
