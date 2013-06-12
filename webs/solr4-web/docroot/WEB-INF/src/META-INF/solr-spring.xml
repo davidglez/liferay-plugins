@@ -38,10 +38,12 @@
 	<bean id="com.liferay.portal.search.solr.SolrIndexSearcher" class="com.liferay.portal.search.solr.SolrIndexSearcher">
 		<property name="solrServer" ref="com.liferay.portal.search.solr.server.BasicAuthSolrServer" />
 		<property name="swallowException" value="true" />
+		<property name="querySuggester" ref="com.liferay.portal.search.solr.suggest.SolrQuerySuggesterImpl" />
 	</bean>
 	<bean id="com.liferay.portal.search.solr.SolrIndexWriter" class="com.liferay.portal.search.solr.SolrIndexWriter">
 		<property name="commit" value="true" />
 		<property name="solrServer" ref="com.liferay.portal.search.solr.server.BasicAuthSolrServer" />
+		<property name="spellCheckIndexWriter" ref="com.liferay.portal.search.solr.SolrSpellCheckIndexWriterImpl" />
 	</bean>
 	<bean id="com.liferay.portal.search.solr.SolrSearchEngineImpl" class="com.liferay.portal.kernel.search.BaseSearchEngine">
 		<property name="clusteredWrite" value="false" />
@@ -49,6 +51,27 @@
 		<property name="indexWriter" ref="com.liferay.portal.search.solr.SolrIndexWriter" />
 		<property name="luceneBased" value="true" />
 		<property name="vendor" value="SOLR" />
+ 	</bean>
+	<bean id="com.liferay.portal.search.solr.SolrSpellCheckIndexWriterImpl" class="com.liferay.portal.search.solr.suggest.SolrSpellCheckIndexWriterImpl">
+		<property name="batchSize" value="10000" />
+		<property name="commit" value="true" />
+		<property name="solrServer" ref="com.liferay.portal.search.solr.server.BasicAuthSolrServer" />
+		<property name="supportedLocales">
+			<util:list>
+				<value>en_US</value>
+				<value>es_ES</value>
+			</util:list>
+		</property>
+	</bean>
+	<bean id="com.liferay.portal.search.solr.suggest.SolrQuerySuggesterImpl" class="com.liferay.portal.search.solr.suggest.SolrQuerySuggesterImpl">
+		<property name="NGramQueryBuilder">
+			<bean id="com.liferay.portal.search.solr.suggest.NGramQueryBuilder" class="com.liferay.portal.search.solr.suggest.NGramQueryBuilderImpl" />
+		</property>
+		<property name="solrServer" ref="com.liferay.portal.search.solr.server.BasicAuthSolrServer" />
+		<property name="stringDistance">
+			<bean id="org.apache.lucene.search.spell.StringDistance" class="org.apache.lucene.search.spell.JaroWinklerDistance" />
+		</property>
+		<property name="threshold" value="0.8f" />
 	</bean>
 
 	<!-- Configurator -->
@@ -60,4 +83,5 @@
 			</util:map>
 		</property>
 	</bean>
+
 </beans>
